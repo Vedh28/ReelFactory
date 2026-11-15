@@ -1,11 +1,11 @@
 # InstaReel
 
-Small Python pipeline: Grok writes a short script and visual prompt, Grok Imagine creates a vertical clip, ElevenLabs makes narration, FFmpeg combines them, and Instagram's official API can publish the Reel.
+Small Python pipeline: Groq writes a short script and visual prompt, ElevenLabs creates the voice and vertical video, FFmpeg combines them, and Instagram's official API can publish the Reel.
 
 ## Setup
 
 1. Install Python 3.10+ and FFmpeg, then make sure `ffmpeg` is on PATH.
-2. Copy `.env.example` to `.env` and fill in the xAI key, ElevenLabs key, and ElevenLabs voice ID. The same xAI key is used for Grok text and video.
+2. Copy `.env.example` to `.env` and fill in the Groq key, ElevenLabs key, and ElevenLabs voice ID. The ElevenLabs video API requires a Pro plan or above and an API key with Image & Video or Flows permission.
 3. Run `python pipeline.py`.
 
 No key is stored in the code or committed to Git. The template is set to publish automatically once all Instagram credentials are filled in; set `AUTO_PUBLISH=false` to run in draft-only mode.

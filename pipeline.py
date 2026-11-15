@@ -25,7 +25,9 @@ def load_env():
 
 
 def request(url, *, method="GET", headers=None, data=None, timeout=120):
-    req = Request(url, data=data, headers=headers or {}, method=method)
+    req = Request(
+        url, data=data, headers={"User-Agent": "InstaReel/1.0 (API client)", **(headers or {})}, method=method
+    )
     try:
         with urlopen(req, timeout=timeout) as response:
             return response.read(), response.headers
@@ -45,25 +47,38 @@ def json_request(url, *, method="GET", headers=None, payload=None, timeout=120):
 
 
 def grok_script(genre):
-    key = os.environ["XAI_API_KEY"]
+    key = os.environ["GROQ_API_KEY"]
     result = json_request(
-        "https://api.x.ai/v1/responses",
+        "https://api.groq.com/openai/v1/chat/completions",
         method="POST",
         headers={"Authorization": f"Bearer {key}"},
         payload={
-            "model": os.getenv("XAI_TEXT_MODEL", "grok-4.7"),
-            "store": False,
-            "input": [
-                {"role": "system", "content": "Create one original Instagram Reel concept. Return only valid JSON with string fields narration, video_prompt, caption. narration must be 25-32 spoken words, natural and factual; avoid unsupported claims. video_prompt must describe a visually engaging vertical 9:16 scene and contain no text or subtitles. caption should be short and include 3-5 relevant hashtags."},
+            "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "max_completion_tokens": 500,
+            "messages": [
+                {"role": "system", "content": "Create one original Instagram Reel concept. narration must be 15-18 spoken words so it fits an 8-second reel. Keep it natural and factual; avoid unsupported claims. video_prompt must describe a visually engaging vertical 9:16 scene and contain no text or subtitles. caption should be short and include 3-5 relevant hashtags."},
                 {"role": "user", "content": f"Genre: {genre}. Make today's idea fresh and specific."},
             ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "reel_script",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "narration": {"type": "string"},
+                            "video_prompt": {"type": "string"},
+                            "caption": {"type": "string"},
+                        },
+                        "required": ["narration", "video_prompt", "caption"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
         },
     )
-    text = "".join(
-        block.get("text", "")
-        for item in result.get("output", []) if item.get("type") == "message"
-        for block in item.get("content", []) if block.get("type") == "output_text"
-    )
+    text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
     try:
         script = json.loads(text)
         for field in ("narration", "video_prompt", "caption"):
@@ -91,38 +106,39 @@ def make_voice(text, destination):
 
 
 def make_video(prompt, destination):
-    key = os.environ["XAI_API_KEY"]
-    headers = {"Authorization": f"Bearer {key}"}
+    key = os.environ["ELEVENLABS_API_KEY"]
+    headers = {"xi-api-key": key}
     started = json_request(
-        "https://api.x.ai/v1/videos/generations",
+        "https://api.elevenlabs.io/v1/flows/video",
         method="POST",
         headers=headers,
         payload={
-            "model": os.getenv("XAI_VIDEO_MODEL", "grok-imagine-video-1.5-lite"),
+            "model_id": os.getenv("ELEVENLABS_VIDEO_MODEL", "veo-3.1-fast-generate-001"),
             "prompt": prompt,
-            "duration": 15,
+            "duration_secs": 8,
             "aspect_ratio": "9:16",
             "resolution": "720p",
+            "generate_audio": False,
         },
     )
-    request_id = started.get("request_id")
+    request_id = started.get("id")
     if not request_id:
-        raise RuntimeError(f"Grok video response missing request_id: {started}")
+        raise RuntimeError(f"ElevenLabs video response missing id: {started}")
     deadline = time.time() + 900
     while time.time() < deadline:
-        result = json_request(f"https://api.x.ai/v1/videos/{request_id}", headers=headers)
+        result = json_request(f"https://api.elevenlabs.io/v1/flows/video/{request_id}", headers=headers)
         status = result.get("status")
-        if status == "done":
-            video_url = result.get("video", {}).get("url")
+        if status == "completed":
+            video_url = result.get("content_url")
             if not video_url:
-                raise RuntimeError(f"Grok marked video done but returned no URL: {result}")
+                raise RuntimeError(f"ElevenLabs marked video completed but returned no URL: {result}")
             video, _ = request(video_url, timeout=300)
             destination.write_bytes(video)
             return
         if status in {"failed", "error"}:
-            raise RuntimeError(f"Grok video generation failed: {result}")
+            raise RuntimeError(f"ElevenLabs video generation failed: {result.get('error_message', status)}")
         time.sleep(10)
-    raise TimeoutError(f"Grok video request {request_id} timed out")
+    raise TimeoutError(f"ElevenLabs video request {request_id} timed out")
 
 
 def mux(video, audio, destination):
@@ -196,7 +212,7 @@ def publish_reel(video, caption):
 
 def main():
     load_env()
-    for required in ("XAI_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
+    for required in ("GROQ_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"):
         if not os.getenv(required):
             raise RuntimeError(f"Set {required} in .env")
     if os.getenv("AUTO_PUBLISH", "true").lower() == "true":
